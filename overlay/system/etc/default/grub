@@ -1,0 +1,17 @@
+# /etc/default/grub — @OS_NAME@
+GRUB_DEFAULT=0
+GRUB_TIMEOUT=3
+GRUB_TIMEOUT_STYLE=menu
+GRUB_DISTRIBUTOR="@OS_NAME@"
+# amd_pstate=active : gestion fine de la fréquence du Ryzen (EPP) ; nowatchdog : un réveil de moins
+GRUB_CMDLINE_LINUX_DEFAULT="quiet loglevel=3 amd_pstate=active nowatchdog"
+GRUB_CMDLINE_LINUX=""
+# Le noyau « zen » est proposé en premier ; linux-lts reste disponible en secours
+GRUB_TOP_LEVEL="/boot/vmlinuz-linux-zen"
+GRUB_PRELOAD_MODULES="part_gpt part_msdos"
+GRUB_TERMINAL_INPUT=console
+GRUB_GFXMODE=auto
+GRUB_GFXPAYLOAD_LINUX=keep
+GRUB_DISABLE_RECOVERY=true
+# Détecte Windows pour le double démarrage
+GRUB_DISABLE_OS_PROBER=false

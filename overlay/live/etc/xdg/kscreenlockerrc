@@ -1,0 +1,4 @@
+# Live : pas de verrouillage d'écran (le compte live n'a pas de mot de passe)
+[Daemon]
+Autolock=false
+LockOnResume=false

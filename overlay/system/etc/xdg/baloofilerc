@@ -1,0 +1,3 @@
+# Désactive l'indexation des fichiers (moins de disque et de CPU en arrière-plan)
+[Basic Settings]
+Indexing-Enabled=false

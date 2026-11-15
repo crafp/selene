@@ -1,0 +1,4 @@
+# Ajouts propres à l'ISO live (en plus de la liste officielle « releng » et de desktop.txt).
+firefox
+firefox-i18n-fr
+gparted

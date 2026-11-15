@@ -1,0 +1,10 @@
+# Après une mise à jour de « filesystem », remet l'identité @OS_NAME@ dans os-release
+[Trigger]
+Operation = Upgrade
+Type = Package
+Target = filesystem
+
+[Action]
+Description = Réapplication de l'identité @OS_NAME@...
+When = PostTransaction
+Exec = /usr/local/bin/selene-brand

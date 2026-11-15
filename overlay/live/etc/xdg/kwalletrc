@@ -1,0 +1,3 @@
+# Live : pas de portefeuille KDE (évite la fenêtre de création au premier mot de passe Wi-Fi)
+[Wallet]
+Enabled=false

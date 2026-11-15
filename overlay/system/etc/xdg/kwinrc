@@ -1,0 +1,10 @@
+# Effets de bureau : flou translucide + minimisation « lampe magique »
+[Plugins]
+blurEnabled=true
+contrastEnabled=true
+magiclampEnabled=true
+squashEnabled=false
+
+[Effect-blur]
+BlurStrength=8
+NoiseStrength=4

@@ -1,0 +1,12 @@
+[Unit]
+Description=Préparation de la session live (langues)
+After=systemd-sysusers.service
+Before=display-manager.service sddm.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/selene-live-setup
+
+[Install]
+WantedBy=multi-user.target

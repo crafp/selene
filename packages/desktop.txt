@@ -1,0 +1,46 @@
+# Bureau KDE Plasma 6 (Wayland) — utilisé par l'ISO live ET par le système installé.
+plasma-meta
+sddm
+sddm-kcm
+konsole
+dolphin
+kate
+ark
+gwenview
+okular
+spectacle
+kcalc
+filelight
+xorg-xwayland
+qt6-multimedia-ffmpeg
+power-profiles-daemon
+
+# Audio (PipeWire)
+pipewire
+pipewire-alsa
+pipewire-pulse
+pipewire-jack
+wireplumber
+gst-plugin-pipewire
+
+# Réseau et Bluetooth
+networkmanager
+bluez
+bluez-utils
+
+# Graphismes AMD (Radeon 780M) : pilote noyau amdgpu + Mesa/Vulkan (RADV)
+mesa
+vulkan-radeon
+vulkan-icd-loader
+?libva-mesa-driver
+?mesa-vdpau
+
+# Polices et icônes
+noto-fonts
+noto-fonts-cjk
+noto-fonts-emoji
+ttf-liberation
+ttf-dejavu
+inter-font
+ttf-jetbrains-mono
+papirus-icon-theme

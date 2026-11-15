@@ -1,0 +1,19 @@
+# Réglages par défaut de @OS_NAME@ pour KDE Plasma (les réglages de l'utilisateur ont la priorité)
+[General]
+ColorScheme=SeleneNight
+font=Inter,10,-1,5,400,0,0,0,0,0,0,0,0,0,0,1
+menuFont=Inter,10,-1,5,400,0,0,0,0,0,0,0,0,0,0,1
+toolBarFont=Inter,10,-1,5,400,0,0,0,0,0,0,0,0,0,0,1
+smallestReadableFont=Inter,8,-1,5,400,0,0,0,0,0,0,0,0,0,0,1
+fixed=JetBrains Mono,10,-1,5,400,0,0,0,0,0,0,0,0,0,0,1
+
+[Icons]
+Theme=Papirus-Dark
+
+[KDE]
+LookAndFeelPackage=org.selene.night.desktop
+widgetStyle=Breeze
+# Animations un peu plus vives (1 = normal, plus petit = plus rapide)
+AnimationDurationFactor=0.7
+# Double-clic pour ouvrir (comme sous Windows)
+SingleClick=false

@@ -1,0 +1,326 @@
+#!/usr/bin/env bash
+# selene-install — installateur guidé de SeleneOS (Arch Linux).
+# À lancer en root depuis l'ISO live (ou depuis l'ISO officielle d'Arch avec ce dépôt).
+# ATTENTION : il peut effacer un disque entier. Lis bien chaque écran avant de confirmer.
+set -Eeuo pipefail
+
+SELF=$(readlink -f "${BASH_SOURCE[0]}")
+SRC=$(cd "$(dirname "$SELF")/.." && pwd)   # racine du projet : le dépôt, ou /usr/share/selene dans l'ISO
+# shellcheck source=/dev/null
+. "$SRC/distro.conf"
+# shellcheck source=/dev/null
+. "$SRC/installer/lib.sh"
+
+TARGET=/mnt
+LOG=/tmp/selene-install.log
+PACCONF=/tmp/selene-pacman.conf
+MIN_FREE=$((40 * 1024 * 1024 * 1024))      # 40 Go minimum pour le mode « à côté de Windows »
+ESP_GUID=c12a7328-f81f-11d2-ba4b-00a0c93ec93b
+
+DISK='' MODE='' ESP='' ROOT='' ESP_EXISTING=''
+USERNAME='' PASSWORD='' MACHINE='' WANT_END4=0
+PKGS=()
+
+trap 'echo; warn "Erreur à la ligne $LINENO. Journal : $LOG"' ERR
+
+# ───────────────────────── petits utilitaires ─────────────────────────
+banner() {
+  clear 2>/dev/null || true
+  printf '\n  %s☾  Installation de %s%s\n  %s\n  ───────────────────────────────────────────────\n\n' \
+    "$C_BLD" "$OS_NAME" "$C_RST" "$OS_TAGLINE"
+}
+
+ask() { # ask "Question" "valeur par défaut"  →  $ANSWER
+  local prompt=$1 def=${2:-} ans=''
+  read -r -p "$prompt${def:+ [$def]} : " ans || true
+  ANSWER=${ans:-$def}
+}
+
+ask_password() { # →  $PASSWORD
+  local p1 p2
+  while true; do
+    read -r -s -p "  Mot de passe : " p1 || true; echo
+    read -r -s -p "  Confirme le mot de passe : " p2 || true; echo
+    if [[ -z $p1 ]]; then warn "Le mot de passe ne peut pas être vide."
+    elif [[ $p1 != "$p2" ]]; then warn "Les deux mots de passe sont différents."
+    else PASSWORD=$p1; return 0; fi
+  done
+}
+
+part() { # part /dev/nvme0n1 2  →  /dev/nvme0n1p2 ; part /dev/sda 2  →  /dev/sda2
+  if [[ $1 == *[0-9] ]]; then printf '%sp%s' "$1" "$2"; else printf '%s%s' "$1" "$2"; fi
+}
+
+largest_free_bytes() { # plus grand bloc d'espace non alloué du disque, en octets
+  parted -ms "$1" unit B print free 2>/dev/null \
+    | awk -F: '$5=="free;"{ s=$4; sub(/B$/,"",s); if (s+0>m) m=s+0 } END{ printf "%d\n", m+0 }' || echo 0
+}
+
+part_numbers() { sgdisk -p "$1" | awk '/^ +[0-9]+ /{print $1}' | sort -n; }
+
+next_part_number() { # plus petit numéro de partition GPT libre
+  local used n=1
+  used=$(part_numbers "$1")
+  while grep -qx "$n" <<<"$used"; do n=$((n + 1)); done
+  echo "$n"
+}
+
+settle_disk() { partprobe "$DISK" 2>/dev/null || true; udevadm settle; sleep 1; }
+
+# ───────────────────────── vérifications ─────────────────────────
+preflight() {
+  [[ $EUID -eq 0 ]] || die "Lance l'installateur en root :  sudo selene-install"
+  [[ -d /sys/firmware/efi ]] || die "Ce PC n'a pas démarré en mode UEFI. Redémarre sur la clé via le menu de démarrage (touche Échap ou F2 au démarrage)."
+  local t
+  for t in pacstrap arch-chroot genfstab sgdisk parted mkfs.btrfs mkfs.fat lsblk reflector; do
+    command -v "$t" >/dev/null || die "Outil manquant : $t (lance l'installateur depuis l'ISO live)."
+  done
+}
+
+check_network() {
+  until curl -fsI --max-time 8 https://archlinux.org >/dev/null 2>&1; do
+    warn "Pas d'accès à Internet (l'installation télécharge les paquets)."
+    echo "  Connecte-toi au Wi-Fi : icône réseau en bas à droite du bureau, ou « nmtui » dans un terminal."
+    read -r -p "  Entrée pour réessayer (Ctrl+C pour quitter) " _ || exit 1
+  done
+}
+
+wait_keyring() {
+  local i
+  for i in $(seq 1 60); do
+    systemctl cat pacman-init.service &>/dev/null || return 0     # pas d'unité : rien à attendre
+    systemctl is-active --quiet pacman-init.service && return 0
+    sleep 1
+  done
+  warn "Le trousseau de clés pacman n'est pas prêt : on tente quand même."
+}
+
+prepare_packages() {
+  msg "Choix des miroirs de téléchargement les plus rapides (~1 min)"
+  if timeout 150 reflector --country France,Germany,Belgium,Netherlands,Switzerland,Luxembourg \
+       --protocol https --age 24 --latest 20 --sort rate --save /etc/pacman.d/mirrorlist &>/dev/null; then
+    info "Miroirs sélectionnés."
+  else
+    warn "reflector a échoué : miroirs par défaut conservés."
+  fi
+  pacman_conf_for_host "$SRC/overlay/system/etc/pacman.conf" "$PACCONF"
+  msg "Synchronisation des dépôts (multilib inclus)"
+  pacman --config "$PACCONF" -Sy >/dev/null
+  msg "Vérification de la liste des paquets"
+  local out
+  out=$(resolve_packages "$PACCONF" /var/lib/pacman \
+        "$SRC/packages/base.txt" "$SRC/packages/desktop.txt" \
+        "$SRC/packages/gaming.txt" "$SRC/packages/apps.txt") \
+    || die "Liste de paquets invalide (voir ci-dessus). Rien n'a été modifié sur ton disque."
+  mapfile -t PKGS <<<"$out"
+  info "${#PKGS[@]} paquets à installer."
+}
+
+# ───────────────────────── questions ─────────────────────────
+boot_disk() { # disque de la clé d'installation (à ne jamais effacer)
+  local src
+  src=$(findmnt -no SOURCE /run/archiso/bootmnt 2>/dev/null || true)
+  [[ -n $src ]] || return 0
+  lsblk -nrso NAME,TYPE "$src" 2>/dev/null | awk '$2=="disk"{print "/dev/"$1; exit}'
+}
+
+choose_disk() {
+  local bd d size model tran i=0 choice=''
+  local -a disks=()
+  bd=$(boot_disk || true)
+  while IFS= read -r d; do
+    [[ -n $bd && $d == "$bd" ]] && continue
+    [[ $d == /dev/zram* || $d == /dev/loop* ]] && continue
+    disks+=("$d")
+  done < <(lsblk -dpno NAME,TYPE | awk '$2=="disk"{print $1}')
+  ((${#disks[@]})) || die "Aucun disque utilisable détecté."
+  echo; echo "Disques détectés (la clé d'installation est exclue) :"
+  for d in "${disks[@]}"; do
+    i=$((i + 1))
+    size=$(lsblk -dno SIZE "$d"); model=$(lsblk -dno MODEL "$d" | xargs); tran=$(lsblk -dno TRAN "$d")
+    printf '  %d) %-14s %8s  %s %s\n' "$i" "$d" "$size" "${model:-?}" "${tran:+[$tran]}"
+  done
+  while true; do
+    read -r -p "Sur quel disque installer ? (numéro) : " choice || true
+    if [[ $choice =~ ^[0-9]+$ ]] && ((choice >= 1 && choice <= ${#disks[@]})); then
+      DISK=${disks[choice - 1]}; break
+    fi
+  done
+  echo; lsblk -o NAME,SIZE,FSTYPE,LABEL,PARTTYPENAME "$DISK"
+}
+
+check_dual() {
+  ESP_EXISTING=$(lsblk -nrpo NAME,PARTTYPE "$DISK" | awk -v g="$ESP_GUID" '$2==g{print $1; exit}')
+  [[ -n $ESP_EXISTING ]] || die "Aucune partition EFI trouvée sur $DISK : le double démarrage n'est pas possible sur ce disque."
+  local free
+  free=$(largest_free_bytes "$DISK")
+  if ((free < MIN_FREE)); then
+    die "Espace non alloué insuffisant ($(numfmt --to=iec "$free") disponibles, 40 Go minimum).
+  Dans Windows : touches Win+X → « Gestion des disques » → clic droit sur C: → « Réduire le volume »,
+  laisse l'espace NON ALLOUÉ, puis relance l'installateur. (Pense aussi à désactiver le démarrage rapide.)"
+  fi
+  info "Partition EFI existante : $ESP_EXISTING — espace libre utilisable : $(numfmt --to=iec "$free")"
+}
+
+choose_mode() {
+  local c=''
+  echo
+  echo "Que faire du disque $DISK ?"
+  echo "  1) Effacer TOUT le disque (Windows et toutes les données seront supprimés)"
+  echo "  2) Installer à côté de Windows (utilise l'espace NON ALLOUÉ du disque)"
+  while [[ $c != 1 && $c != 2 ]]; do read -r -p "Choix (1 ou 2) : " c || true; done
+  if [[ $c == 1 ]]; then MODE=wipe; else MODE=dual; check_dual; fi
+}
+
+ask_account() {
+  echo; echo "Ton compte :"
+  while true; do
+    ask "  Nom d'utilisateur (minuscules, sans espaces)" ""
+    if [[ $ANSWER =~ ^[a-z_][a-z0-9_-]{0,30}$ ]] && ! getent passwd "$ANSWER" >/dev/null; then USERNAME=$ANSWER; break; fi
+    warn "Nom invalide ou déjà pris."
+  done
+  ask_password
+  while true; do
+    ask "  Nom de la machine" "$DEFAULT_HOSTNAME"
+    if [[ $ANSWER =~ ^[a-zA-Z0-9-]{1,63}$ ]]; then MACHINE=$ANSWER; break; fi
+    warn "Nom de machine invalide."
+  done
+}
+
+ask_extras() {
+  local a=''
+  echo
+  echo "Bureau supplémentaire (optionnel) :"
+  echo "  Le style « end-4 » (Hyprland + Quickshell, vu sur TikTok) peut s'installer à côté de KDE."
+  echo "  Il se lance au premier démarrage dans un terminal (20 à 60 min, paquets AUR) ; KDE reste ta session de secours."
+  read -r -p "  Le préparer pour le premier démarrage ? [o/N] " a || true
+  if [[ $a == [oOyY]* ]]; then WANT_END4=1; else WANT_END4=0; fi
+}
+
+confirm() {
+  local a='' mode_txt
+  [[ $MODE == wipe ]] && mode_txt="EFFACEMENT COMPLET du disque" || mode_txt="à côté de Windows (espace non alloué)"
+  banner
+  cat <<EOT
+  Récapitulatif
+    Disque              : $DISK ($(lsblk -dno SIZE "$DISK"))
+    Mode                : $mode_txt
+    Utilisateur         : $USERNAME
+    Nom de la machine   : $MACHINE
+    Langue / clavier    : $DEFAULT_LOCALE / $DEFAULT_KEYMAP
+    Fuseau horaire      : $DEFAULT_TIMEZONE
+    Paquets à installer : ${#PKGS[@]}
+    Bureau end-4 (plus tard) : $([[ $WANT_END4 == 1 ]] && echo "oui, au premier démarrage" || echo "non")
+
+EOT
+  if [[ $MODE == wipe ]]; then
+    echo "  ${C_RED}${C_BLD}ATTENTION : tout le contenu de $DISK sera définitivement perdu.${C_RST}"
+    read -r -p "  Pour confirmer, tape le nom du disque exactement ($DISK) : " a || true
+    [[ $a == "$DISK" ]] || die "Annulé. Rien n'a été modifié."
+  else
+    read -r -p "  Tape OUI (en majuscules) pour lancer l'installation : " a || true
+    [[ $a == OUI ]] || die "Annulé. Rien n'a été modifié."
+  fi
+}
+
+# ───────────────────────── installation ─────────────────────────
+partition_disk() {
+  umount -R "$TARGET" 2>/dev/null || true
+  if [[ $MODE == wipe ]]; then
+    wipefs -af "$DISK" >/dev/null
+    sgdisk --zap-all "$DISK" >/dev/null
+    sgdisk -n1:0:+1GiB -t1:ef00 -c1:SELENE-EFI "$DISK" >/dev/null
+    sgdisk -n2:0:0     -t2:8300 -c2:SELENE-ROOT "$DISK" >/dev/null
+    settle_disk
+    ESP=$(part "$DISK" 1); ROOT=$(part "$DISK" 2)
+    mkfs.fat -F32 -n SELENE-EFI "$ESP" >/dev/null
+  else
+    local n
+    n=$(next_part_number "$DISK")
+    sgdisk -n "$n:0:0" -t "$n:8300" -c "$n:SELENE-ROOT" "$DISK" >/dev/null
+    settle_disk
+    ROOT=$(part "$DISK" "$n"); ESP=$ESP_EXISTING
+  fi
+  [[ -b $ROOT && -b $ESP ]] || die "Partitions introuvables après le partitionnement ($ESP, $ROOT)."
+}
+
+format_and_mount() {
+  mkfs.btrfs -f -L SELENE "$ROOT" >/dev/null
+  mount "$ROOT" "$TARGET"
+  local sv
+  for sv in @ @home @log @cache; do btrfs subvolume create "$TARGET/$sv" >/dev/null; done
+  umount "$TARGET"
+  local o="noatime,compress=zstd:1,space_cache=v2,discard=async"
+  mount -o "$o,subvol=@" "$ROOT" "$TARGET"
+  mkdir -p "$TARGET"/{home,var/log,var/cache,efi}
+  mount -o "$o,subvol=@home"  "$ROOT" "$TARGET/home"
+  mount -o "$o,subvol=@log"   "$ROOT" "$TARGET/var/log"
+  mount -o "$o,subvol=@cache" "$ROOT" "$TARGET/var/cache"
+  mount "$ESP" "$TARGET/efi"
+}
+
+install_system() {
+  msg "Installation des paquets (plusieurs Go à télécharger : prends un café)"
+  pacstrap -C "$PACCONF" -K "$TARGET" "${PKGS[@]}"
+  genfstab -U "$TARGET" >> "$TARGET/etc/fstab"
+  sed -i 's/subvolid=[0-9]*,//' "$TARGET/etc/fstab"
+  cp /etc/pacman.d/mirrorlist "$TARGET/etc/pacman.d/mirrorlist"
+  # Reprend les réseaux Wi-Fi déjà configurés dans la session live
+  if compgen -G '/etc/NetworkManager/system-connections/*' >/dev/null; then
+    install -d -m 755 "$TARGET/etc/NetworkManager/system-connections"
+    cp -a /etc/NetworkManager/system-connections/. "$TARGET/etc/NetworkManager/system-connections/"
+  fi
+}
+
+configure_system() {
+  msg "Application de l'identité et des réglages $OS_NAME"
+  render_tree "$SRC/overlay/system" "$TARGET"
+  install -Dm755 "$SRC/installer/selene-chroot.sh" "$TARGET/root/selene-chroot.sh"
+  cp "$SRC/distro.conf" "$TARGET/root/distro.conf"
+  printf '%s:%s\n' "$USERNAME" "$PASSWORD" | arch-chroot "$TARGET" env \
+    SELENE_USER="$USERNAME" SELENE_HOST="$MACHINE" SELENE_LOCALE="$DEFAULT_LOCALE" \
+    SELENE_KEYMAP="$DEFAULT_KEYMAP" SELENE_TZ="$DEFAULT_TIMEZONE" SELENE_END4="$WANT_END4" \
+    bash /root/selene-chroot.sh
+  rm -f "$TARGET/root/selene-chroot.sh" "$TARGET/root/distro.conf"
+}
+
+run_install() {
+  msg "Partitionnement"
+  partition_disk
+  msg "Formatage (Btrfs compressé + sous-volumes)"
+  format_and_mount
+  install_system
+  configure_system
+}
+
+finish() {
+  local r=''
+  cp "$LOG" "$TARGET/var/log/selene-install.log" 2>/dev/null || true
+  sync
+  umount -R "$TARGET" || warn "Démontage incomplet (sans gravité si tu redémarres tout de suite)."
+  echo
+  msg "Installation terminée !"
+  echo "  1. Retire la clé USB."
+  echo "  2. Redémarre : dans le menu GRUB, choisis $OS_NAME (ou Windows en double démarrage)."
+  echo "  Journal : /var/log/selene-install.log (sur le système installé)."
+  read -r -p "Redémarrer maintenant ? [O/n] " r || true
+  if [[ $r != [nN]* ]]; then reboot; fi
+}
+
+main() {
+  banner
+  preflight
+  check_network
+  wait_keyring
+  prepare_packages
+  choose_disk
+  choose_mode
+  ask_account
+  ask_extras
+  confirm
+  echo
+  run_install 2>&1 | tee "$LOG"
+  finish
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then main "$@"; fi

@@ -1,0 +1,15 @@
+{
+    "KPackageStructure": "Plasma/LookAndFeel",
+    "KPlugin": {
+        "Authors": [{ "Name": "@OS_NAME@" }],
+        "Category": "",
+        "Description": "Thème sombre lunaire pour @OS_NAME@",
+        "Description[fr]": "Thème sombre lunaire pour @OS_NAME@",
+        "Id": "org.selene.night.desktop",
+        "License": "GPL-3.0+",
+        "Name": "Selene Night",
+        "Name[fr]": "Selene Nuit",
+        "Version": "1.0",
+        "Website": "@OS_URL@"
+    }
+}

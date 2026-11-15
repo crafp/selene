@@ -1,0 +1,6 @@
+[General]
+Name=@OS_NAME@
+Version=rolling
+Variant=Arch Linux
+Website=@OS_URL@
+LogoPath=/usr/share/icons/hicolor/scalable/apps/selene.svg

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=@OS_NAME@ Game Mode
+Name[fr]=@OS_NAME@ Mode Jeu
+Comment=Session type console : Steam plein écran dans gamescope
+Exec=/usr/local/bin/selene-gamemode-session
+TryExec=/usr/bin/gamescope
+Type=Application
+DesktopNames=gamescope

@@ -1,0 +1,12 @@
+# remove from airootfs!
+# Active les services de la session live pendant la construction de l'ISO (retiré automatiquement ensuite).
+[Trigger]
+Operation = Install
+Type = Package
+Target = sddm
+
+[Action]
+Description = Activation des services de la session live...
+When = PostTransaction
+Depends = systemd
+Exec = /usr/bin/systemctl enable sddm.service NetworkManager.service bluetooth.service power-profiles-daemon.service

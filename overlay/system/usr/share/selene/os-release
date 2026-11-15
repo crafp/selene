@@ -1,0 +1,11 @@
+NAME="@OS_NAME@"
+PRETTY_NAME="@OS_NAME@"
+ID=@OS_ID@
+ID_LIKE=arch
+BUILD_ID=rolling
+ANSI_COLOR="38;2;157;140;255"
+HOME_URL="@OS_URL@"
+DOCUMENTATION_URL="https://wiki.archlinux.org/"
+SUPPORT_URL="@OS_URL@"
+BUG_REPORT_URL="@OS_URL@/issues"
+LOGO=selene

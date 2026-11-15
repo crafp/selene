@@ -1,0 +1,6 @@
+#!/bin/sh
+# Réapplique l'identité de la distribution (os-release) après une mise à jour du paquet « filesystem ».
+set -e
+src=/usr/share/selene/os-release
+[ -f "$src" ] || exit 0
+install -Dm644 "$src" /usr/lib/os-release

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Génère les langues de la session live (français + anglais) avant l'ouverture du bureau.
+locale-gen >/dev/null 2>&1 || true
+exit 0

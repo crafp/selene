@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Session « Game Mode » : Steam (interface plein écran) dans gamescope, comme une console.
+# Quitter Steam te ramène à l'écran de connexion (choisis « Plasma » pour le bureau).
+
+GAMESCOPE_OPTS=""
+# shellcheck source=/dev/null
+[[ -r /etc/selene/gamemode.conf ]] && . /etc/selene/gamemode.conf
+# shellcheck source=/dev/null
+[[ -r $HOME/.config/selene/gamemode.conf ]] && . "$HOME/.config/selene/gamemode.conf"
+
+export SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0
+export STEAM_MULTIPLE_XWAYLANDS=1
+
+read -r -a extra <<<"$GAMESCOPE_OPTS"
+exec gamescope -e "${extra[@]}" -- steam -gamepadui

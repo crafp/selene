@@ -1,0 +1,37 @@
+name: Construire l'ISO
+
+on:
+  workflow_dispatch:          # bouton « Run workflow » dans l'onglet Actions
+  push:
+    branches: [main, master]
+    paths-ignore: ['README.md']
+
+jobs:
+  iso:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Libérer de l'espace disque
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Construire l'ISO dans un conteneur Arch Linux
+        run: |
+          docker run --rm --privileged -v "$PWD":/repo -w /repo archlinux:latest bash -euxc '
+            # Dans un conteneur, Landlock n'est pas toujours disponible : on désactive la sandbox de pacman
+            sed -i "s/^#DisableSandbox/DisableSandbox/" /etc/pacman.conf
+            pacman -Syu --noconfirm --needed archiso
+            bash tools/check-packages.sh
+            bash build.sh
+          '
+
+      - name: Publier l'ISO (artefact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: selene-iso
+          path: out/*
+          compression-level: 0
+          retention-days: 7

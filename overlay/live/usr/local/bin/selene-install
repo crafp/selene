@@ -1,0 +1,3 @@
+#!/bin/bash
+# Lance l'installateur embarqué dans l'ISO.
+exec bash /usr/share/selene/installer/selene-install "$@"

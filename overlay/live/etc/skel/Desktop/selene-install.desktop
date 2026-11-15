@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Installer @OS_NAME@
+Name[fr]=Installer @OS_NAME@
+Comment=Installer @OS_NAME@ sur ce PC
+Exec=konsole --separate --hold -e sudo /usr/local/bin/selene-install
+Icon=selene
+Terminal=false
+Categories=System;

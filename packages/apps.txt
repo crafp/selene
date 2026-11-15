@@ -1,0 +1,19 @@
+# Applications du quotidien — installées sur le disque.
+firefox
+firefox-i18n-fr
+mpv
+flatpak
+libreoffice-fresh
+libreoffice-fresh-fr
+hunspell-fr
+nodejs
+npm
+python
+python-pip
+?flatpak-kcm
+?kdeconnect
+?haruna
+?elisa
+?btrfs-assistant
+?code
+?github-cli

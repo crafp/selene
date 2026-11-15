@@ -1,0 +1,4 @@
+# Force les fins de ligne Unix (LF) : les scripts bash cassent avec le CRLF de Windows.
+* text=auto eol=lf
+*.jpg binary
+*.png binary

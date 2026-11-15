@@ -1,0 +1,223 @@
+#!/usr/bin/env bash
+# selene — boîte à outils de @OS_NAME@ (un peu comme « ujust » sous Bazzite)
+set -u
+
+# shellcheck source=/dev/null
+OSN=$(. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-@OS_NAME@}")
+
+usage() {
+  cat <<EOT
+$OSN — commandes :
+
+  selene info             Résumé du système (noyau, CPU, GPU, mémoire, ordonnanceur…)
+  selene update           Met à jour Arch (snapshot auto avant/après) puis Flatpak
+  selene perf [mode]      Profil d'énergie : saver | balanced | performance (sans mode : affiche l'état)
+  selene gamemode on|off  Démarrer directement en « Game Mode » (Steam plein écran) ou non
+  selene scx on|off       Ordonnanceur sched_ext « lavd » (expérimental, pensé pour le jeu)
+  selene end4 [fork]      Bureau « end-4 » (Hyprland + Quickshell) ; « fork » = le style end4-pC vu sur TikTok
+  selene extras [noms]    Installe via Flatpak : proton heroic bottles flatseal (ou « all »)
+  selene aur              Installe « paru » (aide pour le dépôt utilisateur AUR)
+  selene snapshots        Liste les points de restauration Btrfs
+  selene clean            Nettoie : cache des paquets, orphelins, journaux, Flatpak inutilisés
+EOT
+}
+
+val() { cat "$1" 2>/dev/null || echo "n/a"; }
+
+cmd_info() {
+  local cpu gpu ops
+  cpu=$(lscpu | sed -n 's/^Model name:[[:space:]]*//p' | head -1)
+  gpu=$(lspci 2>/dev/null | grep -Ei 'vga|3d controller|display' | head -1 | sed 's/^[^:]*:[^:]*: //')
+  if [[ $(val /sys/kernel/sched_ext/state) == enabled ]]; then
+    ops="sched_ext : $(val /sys/kernel/sched_ext/root/ops)"
+  else
+    ops="EEVDF (noyau)"
+  fi
+  printf '%-16s %s\n' "Système"        "$OSN"
+  printf '%-16s %s\n' "Noyau"          "$(uname -r)"
+  printf '%-16s %s\n' "Processeur"     "$cpu"
+  printf '%-16s %s\n' "Graphique"      "${gpu:-n/a}"
+  printf '%-16s %s\n' "Mémoire"        "$(free -h | awk '/^Mem:/{print $3" / "$2" utilisés"}')"
+  printf '%-16s %s\n' "zram"           "$(zramctl --noheadings --output NAME,ALGORITHM,DISKSIZE,DATA 2>/dev/null | head -1)"
+  printf '%-16s %s\n' "Profil énergie" "$(powerprofilesctl get 2>/dev/null || echo n/a)"
+  printf '%-16s %s\n' "amd-pstate"     "$(val /sys/devices/system/cpu/amd_pstate/status)"
+  printf '%-16s %s\n' "EPP (cœur 0)"   "$(val /sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference)"
+  printf '%-16s %s\n' "Ordonnanceur"   "$ops"
+  printf '%-16s %s\n' "Disque /"       "$(df -h --output=used,size,pcent / | tail -1 | xargs)"
+  local lim=/sys/class/power_supply/BAT0/charge_control_end_threshold
+  [[ -r $lim ]] && printf '%-16s %s\n' "Limite batterie" "$(val $lim) %"
+  return 0
+}
+
+cmd_update() {
+  sudo pacman -Syu || return
+  if command -v flatpak >/dev/null; then flatpak update -y; fi
+  local orph
+  orph=$(pacman -Qdtq 2>/dev/null || true)
+  [[ -n $orph ]] && echo "Paquets orphelins : $(echo "$orph" | xargs) — nettoie avec : selene clean"
+  echo "Si le noyau ou le pilote graphique a été mis à jour, redémarre."
+}
+
+cmd_perf() {
+  case "${1:-}" in
+    ""|status) powerprofilesctl list ;;
+    saver|power-saver) powerprofilesctl set power-saver && echo "Profil : économie d'énergie" ;;
+    balanced)          powerprofilesctl set balanced && echo "Profil : équilibré" ;;
+    performance|perf)  powerprofilesctl set performance && echo "Profil : performance" ;;
+    *) echo "Usage : selene perf [saver|balanced|performance]"; return 1 ;;
+  esac
+}
+
+cmd_gamemode() {
+  local conf=/etc/sddm.conf.d/30-selene-autologin.conf user=${SUDO_USER:-$USER}
+  case "${1:-status}" in
+    on)
+      printf '[Autologin]\nUser=%s\nSession=selene-gamemode\n' "$user" | sudo tee "$conf" >/dev/null
+      echo "Au prochain démarrage, $OSN s'ouvre directement en Game Mode."
+      echo "Quitter Steam te ramène à l'écran de connexion : choisis « Plasma » pour le bureau." ;;
+    off)
+      sudo rm -f "$conf"; echo "Démarrage normal rétabli." ;;
+    status)
+      if [[ -f $conf ]]; then echo "Game Mode au démarrage : activé"; else echo "Game Mode au démarrage : désactivé"; fi ;;
+    *) echo "Usage : selene gamemode on|off|status"; return 1 ;;
+  esac
+}
+
+cmd_scx() {
+  local unit=''
+  if [[ -f /usr/lib/systemd/system/scx_loader.service ]]; then unit=scx_loader.service
+  elif [[ -f /usr/lib/systemd/system/scx.service ]]; then unit=scx.service; fi
+  [[ -n $unit ]] || { echo "scx-scheds n'est pas installé : sudo pacman -S scx-scheds"; return 1; }
+  case "${1:-status}" in
+    on)
+      if [[ $unit == scx_loader.service ]]; then
+        [[ -f /etc/scx_loader.toml ]] || printf 'default_sched = "scx_lavd"\ndefault_mode = "Auto"\n' | sudo tee /etc/scx_loader.toml >/dev/null
+      else
+        sudo sed -i 's/^#\?SCX_SCHEDULER=.*/SCX_SCHEDULER=scx_lavd/' /etc/default/scx
+      fi
+      sudo systemctl enable --now "$unit" && echo "Ordonnanceur lavd activé (au démarrage aussi)." ;;
+    off) sudo systemctl disable --now "$unit" && echo "Retour à l'ordonnanceur du noyau (EEVDF)." ;;
+    status) systemctl is-active "$unit"; echo "sched_ext : $(val /sys/kernel/sched_ext/state) / $(val /sys/kernel/sched_ext/root/ops)" ;;
+    *) echo "Usage : selene scx on|off|status"; return 1 ;;
+  esac
+}
+
+# ── Bureau « end-4 » : Hyprland + Quickshell (illogical-impulse) ─────────────
+# Installé avec l'installateur OFFICIEL du projet (https://github.com/end-4/dots-hyprland),
+# lancé dans ta session (pas dans l'installateur d'OS) : il compile des paquets AUR.
+end4_install() {
+  local dir="$HOME/dots-hyprland" ans='' def='[o/N]'
+  [[ ${1:-} == first ]] && def='[O/n]'
+  cat <<EOT
+Bureau « end-4 » (illogical-impulse) : Hyprland + Quickshell, thème Material qui suit ton fond d'écran.
+  • Durée : 20 à 60 min (des paquets AUR sont compilés) ; connexion Internet nécessaire.
+  • Ton système est mis à jour (un snapshot Btrfs est créé automatiquement avant)
+    et sa configuration est copiée dans ~/.config (l'installateur sauvegarde les fichiers existants).
+  • KDE reste installé : à l'écran de connexion, choisis la session « Hyprland » pour l'essayer.
+EOT
+  read -r -p "Lancer l'installation maintenant ? $def " ans
+  if [[ ${1:-} == first ]]; then [[ $ans != [nN]* ]] || ans=n; else [[ $ans == [oOyY]* ]] || ans=n; fi
+  if [[ $ans == n ]]; then echo "D'accord. Quand tu veux :  selene end4"; return 0; fi
+  curl -fsI --max-time 8 https://github.com >/dev/null || { echo "Pas d'accès à Internet."; return 1; }
+  if [[ -d $dir/.git ]]; then
+    git -C "$dir" pull --ff-only || echo "(mise à jour du dépôt impossible : on garde la version locale)"
+    git -C "$dir" submodule update --init --recursive
+  else
+    git clone --recurse-submodules --depth 1 https://github.com/end-4/dots-hyprland.git "$dir" || return 1
+  fi
+  if ! (cd "$dir" && ./setup install); then
+    echo "L'installation s'est arrêtée sur une erreur. Relance « selene end4 » ; documentation : https://ii.clsty.link"
+    return 1
+  fi
+  echo
+  echo "Terminé. Déconnecte-toi puis choisis la session « Hyprland » sur l'écran de connexion."
+  echo "Ensuite (optionnel) le style vu sur TikTok :  selene end4 fork"
+}
+
+end4_fork() {
+  local qs="$HOME/.config/quickshell" vars="$HOME/.config/hypr/hyprland/variables.lua"
+  if [[ ! -d $qs/ii ]]; then
+    echo "Le bureau end-4 (illogical-impulse) doit être installé d'abord :  selene end4"
+    return 1
+  fi
+  if [[ -d $qs/end4-pC/.git ]]; then
+    git -C "$qs/end4-pC" pull --ff-only
+  else
+    git clone --depth 1 https://github.com/pctrade/end4-pC.git "$qs/end4-pC" || return 1
+  fi
+  if [[ -f $vars ]] && grep -q 'hl.env("qsConfig", "ii")' "$vars"; then
+    [[ -e $vars.selene-backup ]] || cp "$vars" "$vars.selene-backup"
+    sed -i 's/hl.env("qsConfig", "ii")/hl.env("qsConfig", "end4-pC")/' "$vars"
+    echo "end4-pC est le shell par défaut de Hyprland (retour arrière : remets \"ii\" dans $vars)."
+  else
+    echo "Ligne qsConfig introuvable dans $vars (la configuration a peut-être changé)."
+  fi
+  echo "Pour l'essayer tout de suite depuis une session Hyprland :  killall qs; qs -c end4-pC & disown"
+}
+
+cmd_end4() {
+  [[ $EUID -ne 0 ]] || { echo "Lance cette commande avec ton compte utilisateur, pas en root."; return 1; }
+  case "${1:-install}" in
+    install)       end4_install ;;
+    --first-login) rm -f "$HOME/.config/autostart/selene-end4.desktop"; end4_install first ;;
+    fork)          end4_fork ;;
+    *) echo "Usage : selene end4 [fork]"; return 1 ;;
+  esac
+}
+
+declare -A FP=(
+  [proton]=net.davidotek.pupgui2
+  [heroic]=com.heroicgameslauncher.hgl
+  [bottles]=com.usebottles.bottles
+  [flatseal]=com.github.tchx84.Flatseal
+)
+
+cmd_extras() {
+  command -v flatpak >/dev/null || { echo "Flatpak n'est pas installé."; return 1; }
+  sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+  if [[ $# -eq 0 ]]; then echo "Disponibles : ${!FP[*]}  (ou « all »)"; return 0; fi
+  local want=("$@") n
+  [[ ${want[0]} == all ]] && want=("${!FP[@]}")
+  for n in "${want[@]}"; do
+    if [[ -n ${FP[$n]:-} ]]; then flatpak install -y flathub "${FP[$n]}"; else echo "Inconnu : $n"; fi
+  done
+}
+
+cmd_aur() {
+  if command -v paru >/dev/null; then echo "paru est déjà installé."; return 0; fi
+  local d; d=$(mktemp -d)
+  git clone https://aur.archlinux.org/paru-bin.git "$d/paru-bin" && (cd "$d/paru-bin" && makepkg -si)
+  rm -rf "$d"
+}
+
+cmd_snapshots() { sudo snapper -c root list; }
+
+cmd_clean() {
+  sudo paccache -rk2
+  local -a orph
+  mapfile -t orph < <(pacman -Qdtq 2>/dev/null || true)
+  if [[ ${#orph[@]} -gt 0 && -n ${orph[0]} ]]; then
+    echo "Paquets orphelins : ${orph[*]}"
+    read -r -p "Les supprimer ? [o/N] " ans
+    [[ $ans == [oOyY]* ]] && sudo pacman -Rns "${orph[@]}"
+  fi
+  sudo journalctl --vacuum-size=200M
+  if command -v flatpak >/dev/null; then flatpak uninstall --unused -y; fi
+  return 0
+}
+
+cmd=${1:-help}; shift || true
+case "$cmd" in
+  info)      cmd_info ;;
+  update)    cmd_update ;;
+  perf)      cmd_perf "$@" ;;
+  gamemode)  cmd_gamemode "$@" ;;
+  scx)       cmd_scx "$@" ;;
+  extras)    cmd_extras "$@" ;;
+  end4)      cmd_end4 "$@" ;;
+  aur)       cmd_aur ;;
+  snapshots) cmd_snapshots ;;
+  clean)     cmd_clean ;;
+  help|-h|--help) usage ;;
+  *) echo "Commande inconnue : $cmd"; echo; usage; exit 1 ;;
+esac

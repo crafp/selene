@@ -1,0 +1,9 @@
+{
+    "KPlugin": {
+        "Authors": [{ "Name": "@OS_NAME@" }],
+        "Id": "SeleneNight",
+        "License": "CC-BY-SA-4.0",
+        "Name": "Selene Night",
+        "Name[fr]": "Selene Nuit"
+    }
+}
