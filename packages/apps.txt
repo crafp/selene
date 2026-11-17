@@ -5,7 +5,7 @@ mpv
 flatpak
 libreoffice-fresh
 libreoffice-fresh-fr
-hunspell-fr
+?hunspell-fr-classical
 nodejs
 npm
 python
